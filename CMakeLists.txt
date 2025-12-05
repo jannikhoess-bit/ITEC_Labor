@@ -12,5 +12,9 @@ add_executable(Swap-ex src/swap_main.c)
 
 add_executable(Print_hist-ex src/printHist_main.c src/itec.c)
 
-add_executable(sql-ex sql_main.c)
+add_executable(sql-ex src/sql_main.c)
 target_link_libraries(sql-ex SQLite::SQLite3)
+
+add_executable(einlesen-ex src/einlesen.c)
+
+add_executable(Aufgabe1-ex src/Aufgabe1-DA.c)

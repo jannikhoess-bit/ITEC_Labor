@@ -44,6 +44,18 @@ void mergeSort(int arr[], int l, int r);
 //merge for MergeSort
 void merge(int arr[], int l, int m, int r);
 
+//Datenbank öffnen
+int open_database(sqlite3 **db, const char *db_name);
+
+////In eine Datenbank schreiben und in die kommandozeile schreiben
+int execute_sql(sqlite3 *db, const char *sql) ;
+
+//In eine Datenbank schreiben und in eine .csv Datei schreiben
+int execute_sql_csv(const char *filename, sqlite3 *db, const char *sql);
+
+//Com Port vorbereiten
+int configure_com_port(const char *port, int serial_port);
+
 
 
 #endif //ITEC_H

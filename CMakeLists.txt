@@ -11,10 +11,13 @@ add_executable(MyCProject-ex src/main.c)
 add_executable(Swap-ex src/swap_main.c)
 
 add_executable(Print_hist-ex src/printHist_main.c src/itec.c)
+target_link_libraries(Print_hist-ex SQLite::SQLite3) 
 
-add_executable(sql-ex src/sql_main.c)
+add_executable(sql-ex src/sql_main.c src/itec.c )
 target_link_libraries(sql-ex SQLite::SQLite3)
 
-add_executable(einlesen-ex src/einlesen.c)
+add_executable(read_com_port-ex src/read_com_port.c src/itec.c)
+target_link_libraries(read_com_port-ex SQLite::SQLite3)
 
-add_executable(Aufgabe1-ex src/Aufgabe1-DA.c)
+add_executable(Aufgabe1-ex src/Aufgabe1-DA.c src/itec.c)
+target_link_libraries(Aufgabe1-ex SQLite::SQLite3)

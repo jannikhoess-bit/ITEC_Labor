@@ -20,13 +20,20 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    int a = configure_com_port(port, serial_port);
-    if (a != 0)
-    {
-        return 1;
-    }
+    struct termios tty;
 
-     sqlite3 *db;
+    // Baudrate setzen
+    cfsetispeed(&tty, B115200);
+    cfsetospeed(&tty, B115200);
+
+    // 8N1 Konfiguration
+    tty.c_cflag &= ~PARENB;        // Keine Parität
+    tty.c_cflag &= ~CSTOPB;        // 1 Stopbit
+    tty.c_cflag &= ~CSIZE;
+    tty.c_cflag |= CS8;            // 8 Datenbits
+    tty.c_cflag |= CREAD | CLOCAL; // Lesen aktivieren & lokaler Modus
+
+    sqlite3 *db;
     
     if (open_database(&db, "Messung1.db") != 0) 
     {

@@ -1,10 +1,9 @@
-// 22072025
+// 05122025
 // C-Programm zum Lesen eines µControllers über USB (Jetson Nano)
 // Port: /dev/ttyUSB0
 // Baudrate: 115200
-// Endlosschleife zum Dauerlauf
-
-#include "itec.h"
+// 10x oder Endlosschleife zum Dauerlauf
+// In der Wgile Schleife eigenes Program einfügen
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,20 +13,25 @@
 #include <string.h>
 #include <errno.h>
 
-
-
 int main() {
     const char* port = "/dev/ttyUSB0";
     int serial_port = open(port, O_RDWR);
 
-    int a = configure_com_port(port, serial_port);
-    if (a = 1)
-    {
-        return 1;
-    }
+    struct termios tty;
 
-    // Schleife zum Lesen
-    while (1) {
+    // Baudrate setzen
+    cfsetispeed(&tty, B115200);
+    cfsetospeed(&tty, B115200);
+
+    // 8N1 Konfiguration
+    tty.c_cflag &= ~PARENB;        // Keine Parität
+    tty.c_cflag &= ~CSTOPB;        // 1 Stopbit
+    tty.c_cflag &= ~CSIZE;
+    tty.c_cflag |= CS8;            // 8 Datenbits
+    tty.c_cflag |= CREAD | CLOCAL; // Lesen aktivieren & lokaler Modus
+  
+    int k=0;   // Zaehler
+    while (k<10) {       // Für Endlosschleife True einsetzten
         char buffer[256];
         memset(buffer, 0, sizeof(buffer));
 
@@ -36,8 +40,10 @@ int main() {
         if (num_bytes < 0) {
             printf("Lesefehler: %s\n", strerror(errno));
         } else {
-            printf("Gelesen: %s\n", buffer);
+            printf("Abstand: %s \n", buffer);
+            k=k+1;
         }
+        // Hier eigenes Programm schreiben
     }
 
     close(serial_port);

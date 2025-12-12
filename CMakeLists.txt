@@ -4,6 +4,8 @@ project(MyCProject)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_BUILD_TYPE Debug)
 
+set(CMAKE_CXX_COMPILER "/usr/bin/gcc")
+
 find_package(SQLite3 REQUIRED)
 
 add_executable(MyCProject-ex src/main.c)

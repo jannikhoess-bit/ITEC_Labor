@@ -8,11 +8,24 @@
 
 #define MAX_ARR_LENGHT 10000
 
+//Praeprozessor Makro fuer die Oeffnungsflags des seriellen Ports
+#ifdef __APPLE__
+#define OPEN_FLAGS O_NONBLOCK
+#else
+#define OPEN_FLAGS O_RDWR
+#endif
+
 struct array_static
 {
     int lenght;
     int values[MAX_ARR_LENGHT];
 };
+
+typedef struct _sim_data {
+    size_t length;
+    size_t index;
+    float data[32];
+} sim_data;
 
 //returns the maximum value of the array
 int max_arr(int arr_lenght, int *arr);
@@ -56,6 +69,33 @@ int execute_sql_csv(const char *filename, sqlite3 *db, const char *sql);
 //Com Port vorbereiten
 int configure_com_port(const char *port, int serial_port);
 
+/**
+ * Configures the serial port with the desired settings.
+ * 
+ * Important settings are:
+ * 
+ * - Baudrate: 115200
+ * - Initial read timeout: 0.5s
+ * - no min bytes for read (non-blocking)
+ * 
+ * @param fd The file descriptor of the opened serial port.
+ * @returns 0 on success, -1 on failure.
+ */
+int configure_serial(int fd);
 
+/**
+ * Handles a complete line read from the serial port.
+ * @param line The line to handle (null-terminated string).
+ * @returns the distance as float in cm, or -1.0f on error.
+ */
+float convert_to_sensor_val(const char *line);
+
+/**
+ * Simulation of the sensor read
+ * @return the number of bytes read
+ */
+ssize_t read_sim(int serial_fd,  char* chunk, size_t chunk_len);
+
+int connect_to_sensor(char * tty_path);
 
 #endif //ITEC_H

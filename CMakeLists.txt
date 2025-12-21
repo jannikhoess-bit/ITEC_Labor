@@ -21,7 +21,8 @@ target_link_libraries(sql-ex SQLite::SQLite3)
 add_executable(read_com_port-ex src/read_com_port.c src/itec.c)
 target_link_libraries(read_com_port-ex SQLite::SQLite3)
 
-add_executable(Aufgabe1-ex src/Aufgabe1-DA.c src/itec.c)
-target_link_libraries(Aufgabe1-ex SQLite::SQLite3)
+add_executable(LaborAufgaben-ex src/LaborAufgaben.c src/itec.c)
+target_link_libraries(LaborAufgaben-ex SQLite::SQLite3)
 
-add_executable(serial-reader-example src/serial_reader-example.c)
+add_executable(serial-reader-example src/serial_reader-example.c src/itec.c)
+target_link_libraries(serial-reader-example SQLite::SQLite3)

@@ -8,11 +8,11 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
-
-#define READ_CHUNK 64
+#include <ctype.h>
 
 //Um die Simulation der Sensorwerte anzuschalten muss "SIM 0" gesetzt werden.
 #define SIM 0
+
 
 int main(int argc, char *argv[]) 
 {   
@@ -84,58 +84,24 @@ int main(int argc, char *argv[])
                 }
 
                 gemessener_abstand[m] = atof(eingelesen);  // Konvertiere String in double
-                
-                #if SIM
-                ssize_t bytes_read = read(serial_fd, chunk, sizeof(chunk));
-                #else
-                ssize_t bytes_read = read_sim(serial_fd, chunk, sizeof(chunk));
-                #endif
+               
+                float sensorwert = -1.0f; 
+                while (sensorwert < 0) 
+                { 
+                    sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len); 
+                }
 
-                if (bytes_read < 0) {
-                    if (errno == EINTR) {
-                        continue;
-                    }
-                    perror("read");
-                    break;
-                }
-                if (bytes_read == 0) {
-                    continue;
-                }
+                printf("Sensor Value: %.3f cm\n", sensorwert);
+               
+                //Abweichung berechnen
+                double abweichung = gemessener_abstand[m] - sensorwert;
 
                 char temp[256];
 
-                for (size_t i = 0; i < bytes_read; ++i) {
-                    char c = chunk[i];
-
-                    if (c == '\r') {
-                        continue;
-                    }
-
-                    if (c == '\n') {
-                        if (line_len > 0) {
-                            line_buffer[line_len] = '\0';
-                            float value = convert_to_sensor_val(line_buffer);
-                            printf("Sensor Value: %.3f cm\n", value);
-                            
-                            //Abweichung berechnen
-                            double abweichung = gemessener_abstand[m] - value;
-                            //Werte in die Datenbank einfügen
-                            sprintf(temp, "INSERT INTO Messung1 (Abstand_Real, Abstand_Sensor, Abweichung) VALUES (%f,%f,%f);", gemessener_abstand[m], value, abweichung);
-                            execute_sql(db, temp);
-                            
-                            line_len = 0;
-                        }
-                        continue;
-                    }
-
-                    if (line_len + 1 >= sizeof(line_buffer)) {
-                        fprintf(stderr, "Warning: incoming line too long, discarding.\n");
-                        line_len = 0;
-                        continue;
-                    }
-
-                    line_buffer[line_len++] = c;
-                }
+                //Werte in die Datenbank einfügen
+                sprintf(temp, "INSERT INTO Messung1 (Abstand_Real, Abstand_Sensor, Abweichung) VALUES (%f,%f,%f);", gemessener_abstand[m], sensorwert, abweichung);
+                execute_sql(db, temp);
+                
                 m++;
             }
 
@@ -146,8 +112,72 @@ int main(int argc, char *argv[])
         } 
         else if (strcmp(modus, "TEST") == 0) //Aufgabe 2
         {
-            //Aufgabe 2 programmieren
             
+            //LookUp-Tabelle erstellen
+            if (open_database(&db, "LookUpTabelle.db") != 0) 
+            {
+                return 1;
+            }
+
+            execute_sql(db, "DROP TABLE IF EXISTS LookUpTabelle;");
+
+            execute_sql(db,
+                "CREATE TABLE IF NOT EXISTS LookUpTabelle ("
+                "Messung_Nr INTEGER PRIMARY KEY, "
+                "Abstand_Real DOUBLE, "
+                "Abstand_Sensor DOUBLE, "
+                "Abweichung DOUBLE);");
+
+            //LookUp importieren
+            if (!import_lookup_from_csv(db, "Messung1.csv")) {
+                printf("Fehler beim Importieren der LookUpTabelle!\n");
+                return 1;
+            }
+
+
+            execute_sql(db, "DROP TABLE IF EXISTS Messung2;");
+
+            execute_sql(db,
+                "CREATE TABLE IF NOT EXISTS Messung2 (Messung_Nr INTEGER PRIMARY KEY, Abstand_Sensor DOUBLE, interpolierter_Wert DOUBLE, Abweichung DOUBLE);");
+
+            
+            printf("Drücke Enter um die Messung zu starten und q um die Messung abzubrechen...\n"); 
+
+            int m = 1;
+            while (1)
+            {
+                char enter[10];
+                printf("Messung %d: ", m);
+                fgets(enter, sizeof(enter), stdin);
+
+                if (strcmp(enter, "q\n") == 0)
+                    break;
+
+                if (strcmp(enter, "\n") != 0) 
+                {
+                    printf("Ungültige Eingabe.\n");
+                    continue;
+                }
+
+                // Sensorwert messen
+                float sensorwert = -1.0f;
+                while (sensorwert < 0)
+                    sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
+
+                printf(" %.3f cm\n", sensorwert);
+
+                // Verarbeitung ausgelagert
+                interpolate_and_store_measurement(db, sensorwert);
+
+                m++;
+            }
+
+            
+
+            //Tabelle in ein .csv File schreiben
+            execute_sql_csv("Messung2.csv",db,
+                "SELECT * FROM Messung2;");
+    
         } 
         else if (strcmp(modus, "AUTO") == 0) //Aufgabe 3
         {
@@ -170,13 +200,21 @@ int main(int argc, char *argv[])
             continue;
         }
        
-    #if SIM 
-        close(serial_fd);
-    #endif
-    sqlite3_close(db);
+        #if SIM 
+            close(serial_fd);
+        #endif
+        sqlite3_close(db);
         
     }
     
     return 0;
 
 }
+
+
+
+
+
+
+
+

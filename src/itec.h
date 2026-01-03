@@ -7,6 +7,7 @@
 #include <sqlite3.h>
 
 #define MAX_ARR_LENGHT 10000
+#define READ_CHUNK 64
 
 //Praeprozessor Makro fuer die Oeffnungsflags des seriellen Ports
 #ifdef __APPLE__
@@ -26,6 +27,12 @@ typedef struct _sim_data {
     size_t index;
     float data[32];
 } sim_data;
+
+typedef struct 
+{ 
+    double sensor_raw; 
+    double real_distance; 
+} LookupEntry;
 
 //returns the maximum value of the array
 int max_arr(int arr_lenght, int *arr);
@@ -96,6 +103,26 @@ float convert_to_sensor_val(const char *line);
  */
 ssize_t read_sim(int serial_fd,  char* chunk, size_t chunk_len);
 
+//Connect to the sensor via serial port
 int connect_to_sensor(char * tty_path);
+
+//Read a sensor value from the serial port
+float read_sensor_value(int serial_fd, char *chunk, char *line_buffer, size_t *line_len);
+
+//Look up the lower neighbor in the lookup table
+int lookup_lower(sqlite3 *db, double sensor, LookupEntry *out);
+
+//Look up the upper neighbor in the lookup table
+int lookup_upper(sqlite3 *db, double sensor, LookupEntry *out);
+
+//Import lookup table from csv file
+int import_lookup_from_csv(sqlite3 *db, const char *filename);
+
+//Interpolate and store a measurement in messung2 table
+void interpolate_and_store_measurement(sqlite3 *db, float sensorwert);
+
+
+
+
 
 #endif //ITEC_H

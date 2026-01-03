@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
+#include <ctype.h>
 
 int max_arr(int arr_lenght, int *arr) {
 
@@ -424,4 +425,167 @@ int connect_to_sensor(char * tty_path){
     }
     return serial_fd;
 }
+
+float read_sensor_value(int serial_fd, char *chunk, char *line_buffer, size_t *line_len) 
+{ 
+    #if SIM 
+        ssize_t bytes_read = read(serial_fd, chunk, READ_CHUNK); 
+    #else 
+        ssize_t bytes_read = read_sim(serial_fd, chunk, READ_CHUNK); 
+    #endif 
+
+    if (bytes_read <= 0) 
+        { 
+            return -1.0f; // Fehler oder keine Daten 
+        } 
+    for (size_t i = 0; i < bytes_read; ++i) 
+    { 
+        char c = chunk[i]; 
+        if (c == '\r') continue; 
+        if (c == '\n') 
+        { 
+            if (*line_len > 0) 
+            { 
+                line_buffer[*line_len] = '\0'; 
+                float value = convert_to_sensor_val(line_buffer); 
+                *line_len = 0; 
+                return value; 
+            } continue; 
+        } 
+        if (*line_len + 1 >= 2 * READ_CHUNK) 
+        { 
+            *line_len = 0; 
+            continue; 
+        } 
+        line_buffer[(*line_len)++] = c; 
+    } 
+    return -1.0f; // Noch kein kompletter Wert 
+}
+
+int lookup_lower(sqlite3 *db, double sensor, LookupEntry *out) 
+{
+    const char *sql = "SELECT Abstand_Sensor, Abstand_Real " "FROM LookUpTabelle " "WHERE Abstand_Sensor <= ? " "ORDER BY Abstand_Sensor DESC " "LIMIT 1;"; 
+    sqlite3_stmt *stmt; 
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) 
+        return 0; 
+    sqlite3_bind_double(stmt, 1, sensor); 
+    int result = 0; 
+    if (sqlite3_step(stmt) == SQLITE_ROW) 
+    { 
+        out->sensor_raw = sqlite3_column_double(stmt, 0); 
+        out->real_distance = sqlite3_column_double(stmt, 1); 
+        result = 1; 
+    } 
+    sqlite3_finalize(stmt); 
+    return result; 
+}
+
+int lookup_upper(sqlite3 *db, double sensor, LookupEntry *out)
+{
+    const char *sql =
+        "SELECT Abstand_Sensor, Abstand_Real "
+        "FROM LookUpTabelle "
+        "WHERE Abstand_Sensor >= ? "
+        "ORDER BY Abstand_Sensor ASC "
+        "LIMIT 1;";
+
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+        return 0;
+
+    sqlite3_bind_double(stmt, 1, sensor);
+
+    int found = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        out->sensor_raw    = sqlite3_column_double(stmt, 0);
+        out->real_distance = sqlite3_column_double(stmt, 1);
+        found = 1;
+    }
+
+    sqlite3_finalize(stmt);
+    return found;
+}
+
+int import_lookup_from_csv(sqlite3 *db, const char *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        printf("Konnte %s nicht öffnen!\n", filename);
+        return 0;
+    }
+
+    char line[256];
+
+    while (fgets(line, sizeof(line), fp))
+    {
+        // Zeilen überspringen, die nicht mit einer Zahl beginnen
+        if (!isdigit(line[0]))
+            continue;
+
+        int messung_nr;
+        double abstand_real, abstand_sensor, abweichung;
+
+        if (sscanf(line, "%d | %lf | %lf | %lf",
+                   &messung_nr, &abstand_real, &abstand_sensor, &abweichung) == 4)
+        {
+            char temp[256];
+            sprintf(temp,
+                "INSERT INTO LookUpTabelle (Messung_Nr, Abstand_Real, Abstand_Sensor, Abweichung) "
+                "VALUES (%d,%f,%f,%f);",
+                messung_nr, abstand_real, abstand_sensor, abweichung);
+
+            execute_sql(db, temp);
+        }
+    }
+
+    fclose(fp);
+    return 1;
+}
+
+void interpolate_and_store_measurement(sqlite3 *db, float sensorwert)
+{
+    LookupEntry low, high;
+
+    // Unteren Nachbarwert suchen
+    if (!lookup_lower(db, sensorwert, &low)) {
+        printf("Kein unterer Nachbarwert gefunden!\n");
+        return;
+    }
+
+    // Oberen Nachbarwert suchen
+    if (!lookup_upper(db, sensorwert, &high)) {
+        printf("Kein oberer Nachbarwert gefunden!\n");
+        return;
+    }
+
+    printf("LOW  : Sensor=%.2f  Real=%.2f\n", low.sensor_raw, low.real_distance);
+    printf("HIGH : Sensor=%.2f  Real=%.2f\n", high.sensor_raw, high.real_distance);
+
+    // Interpolation
+    double interpolated_value;
+
+    if (high.sensor_raw == low.sensor_raw) {
+        interpolated_value = low.real_distance;
+    } else {
+        interpolated_value =
+            low.real_distance +
+            (sensorwert - low.sensor_raw) *
+            (high.real_distance - low.real_distance) /
+            (high.sensor_raw - low.sensor_raw);
+    }
+
+    // Abweichung
+    double abweichung = interpolated_value - sensorwert;
+
+    // In DB einfügen
+    char temp[256];
+    sprintf(temp,
+        "INSERT INTO Messung2 (Abstand_Sensor, interpolierter_Wert, Abweichung) "
+        "VALUES (%f,%f,%f);",
+        sensorwert, interpolated_value, abweichung);
+
+    execute_sql(db, temp);
+}
+
+
 

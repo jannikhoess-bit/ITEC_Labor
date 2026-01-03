@@ -9,9 +9,14 @@
 #include <string.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <math.h>
+#include <sys/ioctl.h>
 
 //Um die Simulation der Sensorwerte anzuschalten muss "SIM 0" gesetzt werden.
 #define SIM 0
+
+#define MAX_MEASUREMENTS 1000
 
 
 int main(int argc, char *argv[]) 
@@ -112,28 +117,16 @@ int main(int argc, char *argv[])
         } 
         else if (strcmp(modus, "TEST") == 0) //Aufgabe 2
         {
-            
+            bool debug = true;
+
             //LookUp-Tabelle erstellen
             if (open_database(&db, "LookUpTabelle.db") != 0) 
             {
                 return 1;
             }
 
-            execute_sql(db, "DROP TABLE IF EXISTS LookUpTabelle;");
-
-            execute_sql(db,
-                "CREATE TABLE IF NOT EXISTS LookUpTabelle ("
-                "Messung_Nr INTEGER PRIMARY KEY, "
-                "Abstand_Real DOUBLE, "
-                "Abstand_Sensor DOUBLE, "
-                "Abweichung DOUBLE);");
-
-            //LookUp importieren
-            if (!import_lookup_from_csv(db, "Messung1.csv")) {
-                printf("Fehler beim Importieren der LookUpTabelle!\n");
-                return 1;
-            }
-
+            if (!create_lookup_table(db, "Messung1.csv")) 
+            return 1;
 
             execute_sql(db, "DROP TABLE IF EXISTS Messung2;");
 
@@ -167,23 +160,155 @@ int main(int argc, char *argv[])
                 printf(" %.3f cm\n", sensorwert);
 
                 // Verarbeitung ausgelagert
-                interpolate_and_store_measurement(db, sensorwert);
+                double interpolated_value = Interpolate_measurement(db, sensorwert, debug);
+                if (isnan(interpolated_value)) {
+                    printf("Interpolation fehlgeschlagen.\n");
+                    continue;
+                }
+
+                // Abweichung
+                double abweichung = interpolated_value - sensorwert;
+
+                // In DB einfügen
+                char temp[256];
+                sprintf(temp,
+                    "INSERT INTO Messung2 (Abstand_Sensor, interpolierter_Wert, Abweichung) "
+                    "VALUES (%f,%f,%f);",
+                    sensorwert, interpolated_value, abweichung);
+
+                execute_sql(db, temp);
 
                 m++;
             }
-
-            
 
             //Tabelle in ein .csv File schreiben
             execute_sql_csv("Messung2.csv",db,
                 "SELECT * FROM Messung2;");
     
         } 
-        else if (strcmp(modus, "AUTO") == 0) //Aufgabe 3
+
+
+        else if (strcmp(modus, "AUTO") == 0) // Aufgabe 3
         {
-            //Aufgabe 3 programmieren
-            
-        } 
+            bool debug = false;
+
+            // LookUp-Tabelle erstellen
+            if (open_database(&db, "LookUpTabelle.db") != 0) 
+                return 1;
+
+            if (!create_lookup_table(db, "Messung1.csv"))
+                return 1;
+
+            execute_sql(db, "DROP TABLE IF EXISTS Messung3;");
+
+            execute_sql(db,
+                "CREATE TABLE IF NOT EXISTS Messung3 ("
+                "Messung_Nr INTEGER PRIMARY KEY, "
+                "Zeitstempel TEXT, "
+                "Abstand_Sensor DOUBLE, "
+                "interpolierter_Wert DOUBLE, "
+                "Abweichung DOUBLE);");
+
+            printf("Automatische Messung gestartet. Drücke Ctrl-C zum Abbrechen...\n");
+
+            while (1)
+            {
+                // Sensorwert messen
+                float sensorwert = -1.0f;
+                while (sensorwert < 0)
+                    sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
+
+                printf(" %.3f cm\n", sensorwert);
+
+                // Interpolation
+                double interpolated_value = Interpolate_measurement(db, sensorwert, debug);
+                if (isnan(interpolated_value)) {
+                    printf("Interpolation fehlgeschlagen.\n");
+                    continue;
+                }
+
+                // Abweichung
+                double abweichung = interpolated_value - sensorwert;
+
+                // In DB einfügen
+                char temp[256];
+                sprintf(temp,
+                    "INSERT INTO Messung3 (Zeitstempel, Abstand_Sensor, interpolierter_Wert, Abweichung) "
+                    "VALUES (DATETIME('now'),%f,%f,%f);",
+                    sensorwert, interpolated_value, abweichung);
+
+                execute_sql(db, temp);
+
+                // Tabelle in CSV schreiben
+                execute_sql_csv("Messung3.csv", db,
+                    "SELECT * FROM Messung3;");
+
+                // Histogramm-Array vorbereiten
+                int histogram[MAX_MEASUREMENTS];
+                int length = 0;
+
+                FILE *fp = fopen("Messung3.csv", "r");
+                if (!fp) {
+                    printf("CSV konnte nicht geöffnet werden!\n");
+                    return 1;
+                }
+
+                char line[256];
+
+                // Header überspringen
+                fgets(line, sizeof(line), fp);
+
+                // CSV Zeilen einlesen
+                while (fgets(line, sizeof(line), fp))
+                {
+                    int nr;
+                    char timestamp[64];
+                    float sensor, interpoliert, abw_csv;
+
+                    if (sscanf(line, "%d,%[^,],%f,%f,%f",
+                            &nr, timestamp, &sensor, &interpoliert, &abw_csv) == 5)
+                    {
+                        if (length >= MAX_MEASUREMENTS)
+                            break;
+
+                        int value = (int)round(interpoliert);
+                        if (value < 0) value = 0;
+
+                        histogram[length++] = value;
+                    }
+                }
+
+                fclose(fp);
+
+                // Histogramm anzeigen
+                struct winsize w;
+                get_terminal_dim(&w);
+
+                int start = 0;
+                int end = 0;
+
+                if (length <= w.ws_col)
+                {
+                    end = length;
+                    system("clear");
+                    print_hist(length, histogram, start, end);
+                }
+                else
+                {
+                    end = w.ws_col;
+                    do 
+                    {
+                        system("clear");
+                        print_hist(length, histogram, start, end);
+                        start++;
+                        end++;
+                        usleep(100 * 1000);
+                    } while (end <= length);
+                }
+            }
+        }
+
+
         else if (strcmp(modus, "FILTER") == 0) //Aufgabe 4
         {
             //Aufgabe 4 programmieren 

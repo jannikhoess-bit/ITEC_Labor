@@ -11,6 +11,8 @@
 #include <termios.h>
 #include <errno.h>
 #include <ctype.h>
+#include <stdbool.h>
+#include <math.h>
 
 int max_arr(int arr_lenght, int *arr) {
 
@@ -254,48 +256,37 @@ int execute_sql_csv(const char *filename, sqlite3 *db, const char *sql)
     const char *tail;
     FILE *f = fopen(filename, "w");
     if (!f) return -1;
-    
+
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, &tail);
-    if (rc != SQLITE_OK) 
-    {
-        fprintf(stderr, "SQL error: %s\n", sqlite3_errmsg(db));
+    if (rc != SQLITE_OK) {
         fclose(f);
         return rc;
     }
-    
-    // Spaltenüberschriften ausgeben
+
     int cols = sqlite3_column_count(stmt);
-    if (cols > 0) {
-        for (int i = 0; i < cols; i++) {
-            fprintf(f, "%s", sqlite3_column_name(stmt, i));
-            if (i < cols - 1) fprintf(f, " | ");
-        }
-        fprintf(f,"\n");
-        
-        // Trennlinie
-        for (int i = 0; i < cols; i++) {
-            int len = strlen(sqlite3_column_name(stmt, i));
-            for (int j = 0; j < len; j++) fprintf(f, "-");
-            if (i < cols - 1) fprintf(f, "-+-");
-        }
-        fprintf(f, "\n");
+
+    // Header
+    for (int i = 0; i < cols; i++) {
+        fprintf(f, "%s", sqlite3_column_name(stmt, i));
+        if (i < cols - 1) fprintf(f, ",");
     }
-    
-    // Daten ausgeben
-    while (sqlite3_step(stmt) == SQLITE_ROW) 
-    {
+    fprintf(f, "\n");
+
+    // Rows
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
         for (int i = 0; i < cols; i++) {
             const unsigned char *text = sqlite3_column_text(stmt, i);
-            fprintf(f, "%s", text ? (const char*)text : "NULL");
-            if (i < cols - 1) fprintf(f, " | ");
+            fprintf(f, "%s", text ? (const char*)text : "");
+            if (i < cols - 1) fprintf(f, ",");
         }
         fprintf(f, "\n");
     }
-    
+
     fclose(f);
     sqlite3_finalize(stmt);
     return SQLITE_OK;
 }
+
 
 int configure_com_port(const char *port, int serial_port)
 {
@@ -516,16 +507,24 @@ int import_lookup_from_csv(sqlite3 *db, const char *filename)
 
     char line[256];
 
+    // Erste Zeile: Header überspringen
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        printf("Datei %s ist leer!\n", filename);
+        return 0;
+    }
+
     while (fgets(line, sizeof(line), fp))
     {
-        // Zeilen überspringen, die nicht mit einer Zahl beginnen
-        if (!isdigit(line[0]))
+        // Leere Zeilen oder Zeilen, die nicht mit einer Ziffer anfangen, ignorieren
+        if (line[0] == '\n' || line[0] == '\r' || !isdigit((unsigned char)line[0]))
             continue;
 
         int messung_nr;
         double abstand_real, abstand_sensor, abweichung;
 
-        if (sscanf(line, "%d | %lf | %lf | %lf",
+        // Format: Messung_Nr,Abstand_Real,Abstand_Sensor,Abweichung
+        if (sscanf(line, "%d,%lf,%lf,%lf",
                    &messung_nr, &abstand_real, &abstand_sensor, &abweichung) == 4)
         {
             char temp[256];
@@ -536,32 +535,109 @@ int import_lookup_from_csv(sqlite3 *db, const char *filename)
 
             execute_sql(db, temp);
         }
+        else {
+            printf("Zeile konnte nicht geparst werden: %s", line);
+        }
     }
 
     fclose(fp);
     return 1;
 }
 
-void interpolate_and_store_measurement(sqlite3 *db, float sensorwert)
+
+
+double Interpolate_measurement(sqlite3 *db, float sensorwert, bool debug)
 {
     LookupEntry low, high;
 
-    // Unteren Nachbarwert suchen
+    //
+    // 1. Unteren Nachbarwert suchen
+    //
     if (!lookup_lower(db, sensorwert, &low)) {
-        printf("Kein unterer Nachbarwert gefunden!\n");
-        return;
+        if (debug)
+            printf("Kein unterer Nachbarwert gefunden! Extrapoliere nach unten...\n");
+
+        // Kleinster und zweitkleinster Wert holen
+        const char *sql =
+            "SELECT Abstand_Sensor, Abstand_Real "
+            "FROM LookUpTabelle "
+            "ORDER BY Abstand_Sensor ASC "
+            "LIMIT 2;";
+
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+            return NAN;
+
+        // erster Step = kleinster Wert → high
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            high.sensor_raw    = sqlite3_column_double(stmt, 0);
+            high.real_distance = sqlite3_column_double(stmt, 1);
+        } else {
+            sqlite3_finalize(stmt);
+            return NAN;
+        }
+
+        // zweiter Step = zweitkleinster Wert → low
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            low.sensor_raw    = sqlite3_column_double(stmt, 0);
+            low.real_distance = sqlite3_column_double(stmt, 1);
+        } else {
+            sqlite3_finalize(stmt);
+            return NAN;
+        }
+
+        sqlite3_finalize(stmt);
+    }
+    //
+    // 2. Oberen Nachbarwert suchen
+    //
+    else if (!lookup_upper(db, sensorwert, &high)) {
+        if (debug)
+            printf("Kein oberer Nachbarwert gefunden! Extrapoliere nach oben...\n");
+
+        // Größter und zweitgrößter Wert holen
+        const char *sql =
+            "SELECT Abstand_Sensor, Abstand_Real "
+            "FROM LookUpTabelle "
+            "ORDER BY Abstand_Sensor DESC "
+            "LIMIT 2;";
+
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+            return NAN;
+
+        // erster Step = größter Wert → low
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            low.sensor_raw    = sqlite3_column_double(stmt, 0);
+            low.real_distance = sqlite3_column_double(stmt, 1);
+        } else {
+            sqlite3_finalize(stmt);
+            return NAN;
+        }
+
+        // zweiter Step = zweitgrößter Wert → high
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            high.sensor_raw    = sqlite3_column_double(stmt, 0);
+            high.real_distance = sqlite3_column_double(stmt, 1);
+        } else {
+            sqlite3_finalize(stmt);
+            return NAN;
+        }
+
+        sqlite3_finalize(stmt);
     }
 
-    // Oberen Nachbarwert suchen
-    if (!lookup_upper(db, sensorwert, &high)) {
-        printf("Kein oberer Nachbarwert gefunden!\n");
-        return;
+    //
+    // Debug-Ausgabe
+    //
+    if (debug) {
+        printf("LOW  : Sensor=%.2f  Real=%.2f\n", low.sensor_raw, low.real_distance);
+        printf("HIGH : Sensor=%.2f  Real=%.2f\n", high.sensor_raw, high.real_distance);
     }
 
-    printf("LOW  : Sensor=%.2f  Real=%.2f\n", low.sensor_raw, low.real_distance);
-    printf("HIGH : Sensor=%.2f  Real=%.2f\n", high.sensor_raw, high.real_distance);
-
-    // Interpolation
+    //
+    // 3. Interpolation / Extrapolation
+    //
     double interpolated_value;
 
     if (high.sensor_raw == low.sensor_raw) {
@@ -574,18 +650,31 @@ void interpolate_and_store_measurement(sqlite3 *db, float sensorwert)
             (high.sensor_raw - low.sensor_raw);
     }
 
-    // Abweichung
-    double abweichung = interpolated_value - sensorwert;
-
-    // In DB einfügen
-    char temp[256];
-    sprintf(temp,
-        "INSERT INTO Messung2 (Abstand_Sensor, interpolierter_Wert, Abweichung) "
-        "VALUES (%f,%f,%f);",
-        sensorwert, interpolated_value, abweichung);
-
-    execute_sql(db, temp);
+    return interpolated_value;
 }
+
+int create_lookup_table(sqlite3 *db, const char *csv_filename)
+{
+    // Alte Tabelle löschen
+    execute_sql(db, "DROP TABLE IF EXISTS LookUpTabelle;");
+
+    // Neue Tabelle erstellen
+    execute_sql(db,
+        "CREATE TABLE IF NOT EXISTS LookUpTabelle ("
+        "Messung_Nr INTEGER PRIMARY KEY, "
+        "Abstand_Real DOUBLE, "
+        "Abstand_Sensor DOUBLE, "
+        "Abweichung DOUBLE);");
+
+    // CSV importieren
+    if (!import_lookup_from_csv(db, csv_filename)) {
+        printf("Fehler beim Importieren der Lookup-Tabelle!\n");
+        return 0;
+    }
+
+    return 1;
+}
+
 
 
 

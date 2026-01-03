@@ -3,8 +3,9 @@
 
 #include <stdlib.h>
 #include <sys/ioctl.h>
-
 #include <sqlite3.h>
+#include <string.h>
+#include <stdbool.h>
 
 #define MAX_ARR_LENGHT 10000
 #define READ_CHUNK 64
@@ -119,9 +120,9 @@ int lookup_upper(sqlite3 *db, double sensor, LookupEntry *out);
 int import_lookup_from_csv(sqlite3 *db, const char *filename);
 
 //Interpolate and store a measurement in messung2 table
-void interpolate_and_store_measurement(sqlite3 *db, float sensorwert);
+double Interpolate_measurement(sqlite3 *db, float sensorwert, bool debug);
 
-
+int create_lookup_table(sqlite3 *db, const char *csv_filename);
 
 
 

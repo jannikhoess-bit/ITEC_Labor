@@ -48,8 +48,6 @@ int get_terminal_dim (struct winsize *w)
         return 1;
     }
 
-    printf ("Terminal width: %d columns\n", w->ws_col);
-    printf ("Terminal height: %d rows\n", w->ws_row);
     return 0;
 };
 
@@ -674,6 +672,9 @@ int create_lookup_table(sqlite3 *db, const char *csv_filename)
 
     return 1;
 }
+
+
+
 
 
 

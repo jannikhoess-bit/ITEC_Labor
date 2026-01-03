@@ -12,11 +12,35 @@
 #include <stdbool.h>
 #include <math.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
+
 
 //Um die Simulation der Sensorwerte anzuschalten muss "SIM 0" gesetzt werden.
 #define SIM 0
 
 #define MAX_MEASUREMENTS 1000
+
+double min_dt = 999999.0;
+double max_dt = 0.0;
+double sum_dt = 0.0;
+long count_dt = 0;
+
+void set_input_mode(void)
+{
+    struct termios t;
+    tcgetattr(STDIN_FILENO, &t);
+    t.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
+void reset_input_mode(void)
+{
+    struct termios t;
+    tcgetattr(STDIN_FILENO, &t);
+    t.c_lflag |= (ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &t);
+}
+
 
 
 int main(int argc, char *argv[]) 
@@ -191,6 +215,13 @@ int main(int argc, char *argv[])
         else if (strcmp(modus, "AUTO") == 0) // Aufgabe 3
         {
             bool debug = false;
+            min_dt = 999999.0;
+            max_dt = 0.0;
+            sum_dt = 0.0;
+            count_dt = 0;
+
+            struct timeval last_time, current_time;
+            gettimeofday(&last_time, NULL);            
 
             // LookUp-Tabelle erstellen
             if (open_database(&db, "LookUpTabelle.db") != 0) 
@@ -209,16 +240,45 @@ int main(int argc, char *argv[])
                 "interpolierter_Wert DOUBLE, "
                 "Abweichung DOUBLE);");
 
-            printf("Automatische Messung gestartet. Drücke Ctrl-C zum Abbrechen...\n");
+            printf("Automatische Messung gestartet. Drücke q zum Abbrechen...\n");
+
+            set_input_mode();
+            fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+
 
             while (1)
             {
+                char c;
+                if (read(STDIN_FILENO, &c, 1) > 0)
+                {
+                    if (c == 'q')
+                    {
+                        printf("\nBeende AUTO-Modus...\n");
+                        break;
+                    }
+                }
+
                 // Sensorwert messen
                 float sensorwert = -1.0f;
                 while (sensorwert < 0)
                     sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
 
                 printf(" %.3f cm\n", sensorwert);
+
+                gettimeofday(&current_time, NULL);
+
+                double dt =
+                    (current_time.tv_sec - last_time.tv_sec) +
+                    (current_time.tv_usec - last_time.tv_usec) / 1e6;
+
+                last_time = current_time;
+
+                if (dt < min_dt) min_dt = dt;
+                if (dt > max_dt) max_dt = dt;
+
+                sum_dt += dt;
+                count_dt++;
+
 
                 // Interpolation
                 double interpolated_value = Interpolate_measurement(db, sensorwert, debug);
@@ -306,7 +366,27 @@ int main(int argc, char *argv[])
                     } while (end <= length);
                 }
             }
+            reset_input_mode();
+            tcflush(STDIN_FILENO, TCIFLUSH);
+            
+            int flags = fcntl(STDIN_FILENO, F_GETFL); 
+            flags &= ~O_NONBLOCK; 
+            fcntl(STDIN_FILENO, F_SETFL, flags);
+
+            printf("\n\n--- Abtastzeit-Statistik ---\n");
+            printf("Minimale Abtastzeit: %.6f s\n", min_dt);
+            printf("Maximale Abtastzeit: %.6f s\n", max_dt);
+
+            if (count_dt > 0)
+                printf("Durchschnittliche Abtastzeit: %.6f s\n", sum_dt / count_dt);
+            else
+                printf("Durchschnittliche Abtastzeit: keine Messungen\n");
+
+            printf("-----------------------------\n");
+
         }
+       
+
 
 
         else if (strcmp(modus, "FILTER") == 0) //Aufgabe 4
@@ -335,8 +415,6 @@ int main(int argc, char *argv[])
     return 0;
 
 }
-
-
 
 
 

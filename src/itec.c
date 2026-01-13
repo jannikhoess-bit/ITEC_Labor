@@ -415,7 +415,7 @@ int connect_to_sensor(char * tty_path){
     return serial_fd;
 }
 
-float read_sensor_value(int serial_fd, char *chunk, char *line_buffer, size_t *line_len) 
+float read_sensor_value( int serial_fd, char *chunk, char *line_buffer, size_t *line_len) 
 { 
     #if SIM 
         ssize_t bytes_read = read(serial_fd, chunk, READ_CHUNK); 

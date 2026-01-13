@@ -9,6 +9,7 @@
 
 #define MAX_ARR_LENGHT 10000
 #define READ_CHUNK 64
+#define SIM 1  //Set to 0 to enable simulation mode, 1 for real sensor
 
 //Praeprozessor Makro fuer die Oeffnungsflags des seriellen Ports
 #ifdef __APPLE__
@@ -108,7 +109,7 @@ ssize_t read_sim(int serial_fd,  char* chunk, size_t chunk_len);
 int connect_to_sensor(char * tty_path);
 
 //Read a sensor value from the serial port
-float read_sensor_value(int serial_fd, char *chunk, char *line_buffer, size_t *line_len);
+float read_sensor_value( int serial_fd, char *chunk, char *line_buffer, size_t *line_len);
 
 //Look up the lower neighbor in the lookup table
 int lookup_lower(sqlite3 *db, double sensor, LookupEntry *out);

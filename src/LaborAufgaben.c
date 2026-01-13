@@ -16,7 +16,7 @@
 
 
 //Um die Simulation der Sensorwerte anzuschalten muss "SIM 0" gesetzt werden.
-#define SIM 0
+//#define SIM 1
 
 #define MAX_MEASUREMENTS 1000
 
@@ -115,6 +115,16 @@ int main(int argc, char *argv[])
                 gemessener_abstand[m] = atof(eingelesen);  // Konvertiere String in double
                
                 float sensorwert = -1.0f; 
+                // 1) Leere seriellen Eingabepuffer, damit keine alten Bytes stören
+                tcflush(serial_fd, TCIFLUSH);
+
+                // 2) Pufferzustand zurücksetzen
+                line_len = 0;
+                line_buffer[0] = '\0';
+
+                // 3) Kleine Wartezeit, damit der Sensor frische Daten erzeugen kann
+                usleep(200000); // 200 ms
+
                 while (sensorwert < 0) 
                 { 
                     sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len); 
@@ -178,6 +188,16 @@ int main(int argc, char *argv[])
 
                 // Sensorwert messen
                 float sensorwert = -1.0f;
+                
+                // 1) Leere seriellen Eingabepuffer, damit keine alten Bytes stören
+                tcflush(serial_fd, TCIFLUSH);
+
+                // 2) Pufferzustand zurücksetzen
+                line_len = 0;
+                line_buffer[0] = '\0';
+
+                // 3) Kleine Wartezeit, damit der Sensor frische Daten erzeugen kann
+                usleep(200000); // 200 ms
                 while (sensorwert < 0)
                     sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
 
@@ -238,7 +258,8 @@ int main(int argc, char *argv[])
                 "Zeitstempel TEXT, "
                 "Abstand_Sensor DOUBLE, "
                 "interpolierter_Wert DOUBLE, "
-                "Abweichung DOUBLE);");
+                "Abweichung DOUBLE, "
+                "ProfilHoehe DOUBLE);"); //Profielhöhe für Entwicklung mechatronischer Systeme
 
             printf("Automatische Messung gestartet. Drücke q zum Abbrechen...\n");
 
@@ -290,12 +311,20 @@ int main(int argc, char *argv[])
                 // Abweichung
                 double abweichung = interpolated_value - sensorwert;
 
+                //Profilhöhe für Entwicklung mechatronischer Systeme
+                double Hoehe = 30;   //abstand Sensor zum Boden des profils
+                if (interpolated_value > Hoehe) 
+                {
+                    interpolated_value = Hoehe;
+                } //Vermeidung negativer Profilhöhe
+                    double profilhoehe = Hoehe - interpolated_value;
+
                 // In DB einfügen
                 char temp[256];
                 sprintf(temp,
-                    "INSERT INTO Messung3 (Zeitstempel, Abstand_Sensor, interpolierter_Wert, Abweichung) "
-                    "VALUES (DATETIME('now'),%f,%f,%f);",
-                    sensorwert, interpolated_value, abweichung);
+                    "INSERT INTO Messung3 (Zeitstempel, Abstand_Sensor, interpolierter_Wert, Abweichung, ProfilHoehe) "
+                    "VALUES (DATETIME('now'),%f,%f,%f,%f);",
+                    sensorwert, interpolated_value, abweichung, profilhoehe);
 
                 execute_sql(db, temp);
 
@@ -323,15 +352,18 @@ int main(int argc, char *argv[])
                 {
                     int nr;
                     char timestamp[64];
-                    float sensor, interpoliert, abw_csv;
+                    float sensor, interpoliert, abw_csv, profilhoehe_csv;
 
-                    if (sscanf(line, "%d,%[^,],%f,%f,%f",
-                            &nr, timestamp, &sensor, &interpoliert, &abw_csv) == 5)
+                    if (sscanf(line, "%d,%[^,],%f,%f,%f,%f",
+                            &nr, timestamp, &sensor, &interpoliert, &abw_csv, &profilhoehe_csv) == 6)
                     {
                         if (length >= MAX_MEASUREMENTS)
                             break;
-
-                        int value = (int)round(interpoliert);
+                        
+                        //int value = (int)round(interpoliert);   //Für Itec
+                        if (profilhoehe_csv < 0) 
+                            {profilhoehe_csv = 0;}
+                        int value = (int)round(profilhoehe_csv);  //Für Entwicklung mechatronischer Systeme
                         if (value < 0) value = 0;
 
                         histogram[length++] = value;
@@ -362,7 +394,7 @@ int main(int argc, char *argv[])
                         print_hist(length, histogram, start, end);
                         start++;
                         end++;
-                        usleep(100 * 1000);
+                        usleep(100 * 500);
                     } while (end <= length);
                 }
             }
@@ -383,6 +415,9 @@ int main(int argc, char *argv[])
                 printf("Durchschnittliche Abtastzeit: keine Messungen\n");
 
             printf("-----------------------------\n");
+
+            
+            printf("Das Profil ist %f cm lang.\n", );
 
         }
        

@@ -312,7 +312,7 @@ int main(int argc, char *argv[])
                 double abweichung = interpolated_value - sensorwert;
 
                 //Profilhöhe für Entwicklung mechatronischer Systeme
-                double Hoehe = 30;   //abstand Sensor zum Boden des profils
+                double Hoehe = 25;   //abstand Sensor zum Boden des profils
                 if (interpolated_value > Hoehe) 
                 {
                     interpolated_value = Hoehe;
@@ -416,8 +416,8 @@ int main(int argc, char *argv[])
 
             printf("-----------------------------\n");
 
-            
-            printf("Das Profil ist %f cm lang.\n", );
+
+            //printf("Das Profil ist %f cm lang.\n", );
 
         }
        

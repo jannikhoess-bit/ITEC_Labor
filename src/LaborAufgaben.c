@@ -465,95 +465,143 @@ int main(int argc, char *argv[])
 
         }
        
-        else if (strcmp(modus, "FILTER") == 0) //Aufgabe 4
+        else if (strcmp(modus, "FILTER") == 0) // Aufgabe 4
         {
-            // Konfiguration
+            // Öffne/erstelle DB für Filterergebnisse
             if (open_database(&db, "Messung4.db") != 0) {
                 return 1;
             }
 
-            // Tabelle anlegen
+            // Alte Tabelle löschen und neue Tabelle anlegen
             execute_sql(db, "DROP TABLE IF EXISTS Messung4;");
             execute_sql(db,
                 "CREATE TABLE IF NOT EXISTS Messung4 ("
                 "Messung_Nr INTEGER PRIMARY KEY, "
                 "Zeitstempel TEXT, "
-                "Abstand_Sensor DOUBLE, "
-                "Abstand_Gefiltert DOUBLE);");
+                "Interpolierter_Wert DOUBLE, "
+                "Interpolierter_Gefiltert DOUBLE);");
 
-            // Fenstergröße abfragen
-            char eingabe[64];
-            int window = 5; // Default
-            printf("Gleitender Mittelwert: Fenstergröße eingeben (z.B. 5): ");
-            if (fgets(eingabe, sizeof(eingabe), stdin) != NULL) {
-                int tmp = atoi(eingabe);
-                if (tmp > 0) window = tmp;
-            }
-            printf("Verwende Fenstergröße = %d\n", window);
-
-            // Puffer für gleitenden Mittelwert
-            float *buf = malloc(sizeof(float) * window);
-            if (!buf) {
-                fprintf(stderr, "Speicherfehler\n");
+            // CSV einlesen
+            const char *infile = "Messung3.csv";
+            FILE *f = fopen(infile, "r");
+            if (!f) {
+                printf("Kann %s nicht öffnen. Stelle sicher, dass die Datei existiert.\n", infile);
                 sqlite3_close(db);
-                return 1;
+                continue;
             }
-            for (int i = 0; i < window; ++i) buf[i] = 0.0f;
-            int buf_idx = 0;
-            int buf_count = 0;
 
-            printf("FILTER-Modus: Drücke Enter für eine Messung, 'q' + Enter zum Beenden.\n");
+            // Header überspringen
+            char line[512];
+            if (!fgets(line, sizeof(line), f)) {
+                printf("Datei %s ist leer.\n", infile);
+                fclose(f);
+                sqlite3_close(db);
+                continue;
+            }
 
-            int measurement_nr = 1;
-            while (1)
-            {
-                char line_in[32];
-                printf("Messung %d: ", measurement_nr);
-                if (fgets(line_in, sizeof(line_in), stdin) == NULL) {
-                    // EOF oder Fehler
-                    break;
+            // Dynamisches Array für interpolierte Werte und Timestamp
+            size_t cap = 1024;
+            size_t count = 0;
+            double *interp_vals = malloc(cap * sizeof(double));
+            char **timestamps = malloc(cap * sizeof(char*));
+            int *nr_arr = malloc(cap * sizeof(int));
+            if (!interp_vals || !timestamps || !nr_arr) {
+                perror("malloc");
+                fclose(f);
+                free(interp_vals); free(timestamps); free(nr_arr);
+                sqlite3_close(db);
+                continue;
+            }
+
+            while (fgets(line, sizeof(line), f)) {
+                // Erwartetes CSV-Format:
+                // Messung_Nr,Zeitstempel,Abstand_Sensor,interpolierter_Wert,Abweichung,ProfilHoehe
+                int nr = 0;
+                char ts[128] = {0};
+                double abstand = 0.0;
+                double interp = 0.0, abw = 0.0, profil = 0.0;
+
+                int scanned = sscanf(line, "%d,%127[^,],%lf,%lf,%lf,%lf",
+                                    &nr, ts, &abstand, &interp, &abw, &profil);
+                if (scanned < 4) {
+                    // ungültige Zeile überspringen
+                    continue;
                 }
-                // Abbruch prüfen
-                if (line_in[0] == 'q' || line_in[0] == 'Q') {
-                    printf("Beende FILTER-Modus...\n");
-                    break;
+
+                if (count >= cap) {
+                    size_t newcap = cap * 2;
+                    double *tmpv = realloc(interp_vals, newcap * sizeof(double));
+                    char **tmpts = realloc(timestamps, newcap * sizeof(char*));
+                    int *tmpn = realloc(nr_arr, newcap * sizeof(int));
+                    if (!tmpv || !tmpts || !tmpn) {
+                        perror("realloc");
+                        break;
+                    }
+                    interp_vals = tmpv;
+                    timestamps = tmpts;
+                    nr_arr = tmpn;
+                    cap = newcap;
                 }
-                // Sensorwert messen (wie in anderen Modi)
-                float sensorwert = -1.0f;
-                while (sensorwert < 0)
-                    sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
 
-                // Puffer aktualisieren
-                buf[buf_idx] = sensorwert;
-                buf_idx = (buf_idx + 1) % window;
-                if (buf_count < window) buf_count++;
+                interp_vals[count] = interp;
+                nr_arr[count] = nr;
+                timestamps[count] = strdup(ts); // freed later
+                count++;
+            }
+            fclose(f);
 
-                // Mittelwert berechnen
-                double sum = 0.0;
-                for (int i = 0; i < buf_count; ++i) sum += buf[i];
-                double filtered = sum / (double)buf_count;
+            if (count == 0) {
+                printf("Keine gültigen Messdaten in %s gefunden.\n", infile);
+                for (size_t i = 0; i < count; ++i) free(timestamps[i]);
+                free(interp_vals); free(timestamps); free(nr_arr);
+                sqlite3_close(db);
+                continue;
+            }
 
-                // In DB einfügen
-                char temp[512];
+            // Gefilterte Werte berechnen (3-Punkt Mittelwert über interpolierte Werte)
+            double *filtered = malloc(count * sizeof(double));
+            if (!filtered) {
+                perror("malloc");
+                for (size_t i = 0; i < count; ++i) free(timestamps[i]);
+                free(interp_vals); free(timestamps); free(nr_arr);
+                sqlite3_close(db);
+                continue;
+            }
+
+            for (size_t i = 0; i < count; ++i) {
+                double y_prev = (i == 0) ? interp_vals[i] : interp_vals[i-1];
+                double y_curr = interp_vals[i];
+                double y_next = (i + 1 >= count) ? interp_vals[i] : interp_vals[i+1];
+                filtered[i] = (y_prev + y_curr + y_next) / 3.0;
+            }
+
+            // Ergebnisse in DB einfügen (verwende interpolierten Wert und gefilterten Wert)
+            char temp[512];
+            for (size_t i = 0; i < count; ++i) {
+                // Timestamp als Text einfügen; einfache SQL-Stringbildung, Timestamp sollte keine einfachen Hochkommas enthalten
                 snprintf(temp, sizeof(temp),
-                    "INSERT INTO Messung4 (Zeitstempel, Abstand_Sensor, Abstand_Gefiltert) "
-                    "VALUES (DATETIME('now'),%f,%f);",
-                    sensorwert, filtered);
+                    "INSERT INTO Messung4 (Messung_Nr, Zeitstempel, Interpolierter_Wert, Interpolierter_Gefiltert) "
+                    "VALUES (%d,'%s',%f,%f);",
+                    nr_arr[i], timestamps[i], interp_vals[i], filtered[i]);
                 execute_sql(db, temp);
-
-                printf(" Roh: %.3f cm  Gefiltert: %.3f cm\n", sensorwert, filtered);
-
-                measurement_nr++;
             }
 
-            // CSV schreiben
+            // CSV aus DB erzeugen
             execute_sql_csv("Messung4.csv", db, "SELECT * FROM Messung4;");
 
-            free(buf);
+            // Aufräumen
+            for (size_t i = 0; i < count; ++i) free(timestamps[i]);
+            free(interp_vals);
+            free(timestamps);
+            free(nr_arr);
+            free(filtered);
+
             sqlite3_close(db);
-            printf("FILTER-Modus beendet. Ergebnisse in Messung4.csv\n");
-           
-        } 
+            printf("FILTER-Modus abgeschlossen. Gefilterte Daten in Messung4.csv und Messung4.db\n");
+        }
+
+
+
         else if (strcmp(modus, "FUN") == 0) //Aufgabe 5
         {
             //Aufgabe 5 programmieren

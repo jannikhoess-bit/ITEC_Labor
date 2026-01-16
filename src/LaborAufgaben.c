@@ -15,6 +15,7 @@
 #include <sys/time.h>
 
 
+
 //Um die Simulation der Sensorwerte anzuschalten muss "SIM 0" gesetzt werden.
 //#define SIM 1
 
@@ -265,7 +266,9 @@ int main(int argc, char *argv[])
 
             set_input_mode();
             fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
-
+            
+            int start = 0;
+  
 
             while (1)
             {
@@ -312,12 +315,12 @@ int main(int argc, char *argv[])
                 double abweichung = interpolated_value - sensorwert;
 
                 //Profilhöhe für Entwicklung mechatronischer Systeme
-                double Hoehe = 25;   //abstand Sensor zum Boden des profils
+                double Hoehe = 14;   //abstand Sensor zum Boden des profils
                 if (interpolated_value > Hoehe) 
                 {
                     interpolated_value = Hoehe;
                 } //Vermeidung negativer Profilhöhe
-                    double profilhoehe = Hoehe - interpolated_value;
+                double profilhoehe = Hoehe - interpolated_value;
 
                 // In DB einfügen
                 char temp[256];
@@ -376,18 +379,15 @@ int main(int argc, char *argv[])
                 struct winsize w;
                 get_terminal_dim(&w);
 
-                int start = 0;
-                int end = 0;
-
                 if (length <= w.ws_col)
                 {
-                    end = length;
+                    int end = length;
                     system("clear");
                     print_hist(length, histogram, start, end);
                 }
                 else
                 {
-                    end = w.ws_col;
+                    int end = start + w.ws_col;
                     do 
                     {
                         system("clear");
@@ -416,17 +416,142 @@ int main(int argc, char *argv[])
 
             printf("-----------------------------\n");
 
+            
+            // ------------------------------------------------------------
+            // Längenberechnung mit Uhrzeit-Eingabe (nur HH:MM:SS)
+            // ------------------------------------------------------------
+            
+            char eingabe[100];
+            double tA, tE;
 
-            //printf("Das Profil ist %f cm lang.\n", );
+            printf("Bitte Anfangszeit eingeben (Format: HH:MM:SS): ");
+            fgets(eingabe, sizeof(eingabe), stdin);
+            eingabe[strcspn(eingabe, "\n")] = 0;
+            tA = parse_time_hms(eingabe);
+
+            if (tA < 0) {
+                printf("Ungueltige Uhrzeit!\n");
+                return 1;
+            }
+
+            printf("Bitte Endzeit eingeben (Format: HH:MM:SS): ");
+            fgets(eingabe, sizeof(eingabe), stdin);
+            eingabe[strcspn(eingabe, "\n")] = 0;
+            tE = parse_time_hms(eingabe);
+
+            if (tE < 0) {
+                printf("Ungueltige Uhrzeit!\n");
+                return 1;
+            }
+
+            // Geschwindigkeit berechnen:
+            float t1 = 183.0;   // Zeit für 80 cm
+            float weg_cm = 80.0;
+            float v = weg_cm / t1;   // cm/s
+
+            // Zeitdifferenz
+            double t = tE - tA;
+
+            if (t < 0) {
+                printf("Endzeit liegt vor der Anfangszeit!\n");
+                return 1;
+            }
+
+            // Länge berechnen
+            float laenge = v * t;
+
+            printf("Länge des Bauteils: %.3f cm\n", laenge);
+            
 
         }
        
-
-
-
         else if (strcmp(modus, "FILTER") == 0) //Aufgabe 4
         {
-            //Aufgabe 4 programmieren 
+            // Konfiguration
+            if (open_database(&db, "Messung4.db") != 0) {
+                return 1;
+            }
+
+            // Tabelle anlegen
+            execute_sql(db, "DROP TABLE IF EXISTS Messung4;");
+            execute_sql(db,
+                "CREATE TABLE IF NOT EXISTS Messung4 ("
+                "Messung_Nr INTEGER PRIMARY KEY, "
+                "Zeitstempel TEXT, "
+                "Abstand_Sensor DOUBLE, "
+                "Abstand_Gefiltert DOUBLE);");
+
+            // Fenstergröße abfragen
+            char eingabe[64];
+            int window = 5; // Default
+            printf("Gleitender Mittelwert: Fenstergröße eingeben (z.B. 5): ");
+            if (fgets(eingabe, sizeof(eingabe), stdin) != NULL) {
+                int tmp = atoi(eingabe);
+                if (tmp > 0) window = tmp;
+            }
+            printf("Verwende Fenstergröße = %d\n", window);
+
+            // Puffer für gleitenden Mittelwert
+            float *buf = malloc(sizeof(float) * window);
+            if (!buf) {
+                fprintf(stderr, "Speicherfehler\n");
+                sqlite3_close(db);
+                return 1;
+            }
+            for (int i = 0; i < window; ++i) buf[i] = 0.0f;
+            int buf_idx = 0;
+            int buf_count = 0;
+
+            printf("FILTER-Modus: Drücke Enter für eine Messung, 'q' + Enter zum Beenden.\n");
+
+            int measurement_nr = 1;
+            while (1)
+            {
+                char line_in[32];
+                printf("Messung %d: ", measurement_nr);
+                if (fgets(line_in, sizeof(line_in), stdin) == NULL) {
+                    // EOF oder Fehler
+                    break;
+                }
+                // Abbruch prüfen
+                if (line_in[0] == 'q' || line_in[0] == 'Q') {
+                    printf("Beende FILTER-Modus...\n");
+                    break;
+                }
+                // Sensorwert messen (wie in anderen Modi)
+                float sensorwert = -1.0f;
+                while (sensorwert < 0)
+                    sensorwert = read_sensor_value(serial_fd, chunk, line_buffer, &line_len);
+
+                // Puffer aktualisieren
+                buf[buf_idx] = sensorwert;
+                buf_idx = (buf_idx + 1) % window;
+                if (buf_count < window) buf_count++;
+
+                // Mittelwert berechnen
+                double sum = 0.0;
+                for (int i = 0; i < buf_count; ++i) sum += buf[i];
+                double filtered = sum / (double)buf_count;
+
+                // In DB einfügen
+                char temp[512];
+                snprintf(temp, sizeof(temp),
+                    "INSERT INTO Messung4 (Zeitstempel, Abstand_Sensor, Abstand_Gefiltert) "
+                    "VALUES (DATETIME('now'),%f,%f);",
+                    sensorwert, filtered);
+                execute_sql(db, temp);
+
+                printf(" Roh: %.3f cm  Gefiltert: %.3f cm\n", sensorwert, filtered);
+
+                measurement_nr++;
+            }
+
+            // CSV schreiben
+            execute_sql_csv("Messung4.csv", db, "SELECT * FROM Messung4;");
+
+            free(buf);
+            sqlite3_close(db);
+            printf("FILTER-Modus beendet. Ergebnisse in Messung4.csv\n");
            
         } 
         else if (strcmp(modus, "FUN") == 0) //Aufgabe 5

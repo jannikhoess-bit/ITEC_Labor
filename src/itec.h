@@ -125,6 +125,7 @@ double Interpolate_measurement(sqlite3 *db, float sensorwert, bool debug);
 
 int create_lookup_table(sqlite3 *db, const char *csv_filename);
 
+double parse_time_hms(const char *ts);
 
 
 #endif //ITEC_H

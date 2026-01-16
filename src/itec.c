@@ -673,6 +673,19 @@ int create_lookup_table(sqlite3 *db, const char *csv_filename)
     return 1;
 }
 
+// Uhrzeit HH:MM:SS in Sekunden umwandeln
+double parse_time_hms(const char *ts)
+{
+    int h, m, s;
+
+    if (sscanf(ts, "%d:%d:%d", &h, &m, &s) != 3) {
+        return -1.0;
+    }
+
+    // Sekunden berechnen
+    return h * 3600.0 + m * 60.0 + s;
+}
+
 
 
 
